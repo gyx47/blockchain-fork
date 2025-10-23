@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 // import { ethers } from 'ethers'; // 之前的导入方式
-const ethers = (window as any).ethers; // 从全局窗口对象获取 ethers (cast window to any to satisfy TypeScript)
-
+// const ethers = (window as any).ethers; // 从全局窗口对象获取 ethers (cast window to any to satisfy TypeScript)
+import { ethers } from 'ethers';
 // --- Contract ABI ---
 // Replace with your actual contract ABI after compilation
 const contractABI = [
@@ -1084,7 +1084,7 @@ const contractABI = [
 
 // --- Contract Address ---
 // Replace with your deployed contract address
-const contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; // Example: "0x5FbDB2315678afecb367f032d93F642f64180aa3" for local Hardhat node
+const contractAddress = "0xbE7959E33B2eb78584F440CE7C966BE84301893a"; // Example: "0x5FbDB2315678afecb367f032d93F642f64180aa3" for local Hardhat node
 
 
 // --- Helper Functions ---
@@ -1134,6 +1134,13 @@ function App() {
         setLoadingMessage('Connecting Wallet...');
         setErrorMessage('');
         setSuccessMessage('');
+         if (typeof ethers === 'undefined' || !ethers) {
+            setErrorMessage('Ethers library is not loaded. Please wait or refresh.');
+            setLoadingMessage('');
+            console.error('Ethers library not found on window object.');
+            return;
+        }
+
         if ((window as any).ethereum) {
             try {
                 const web3Provider = new ethers.providers.Web3Provider((window as any).ethereum);
@@ -1563,7 +1570,7 @@ function App() {
             {successMessage && <div className="mb-4 p-3 bg-green-600 text-white rounded">{successMessage} <button onClick={() => setSuccessMessage('')} className="float-right font-bold">X</button></div>}
 
              {/* Faucet for Local Testing */}
-             {account && contractAddress === "0x5FbDB2315678afecb367f032d93F642f64180aa3" && ( // Only show if connected and using default local address
+             {account  && ( // Only show if connected and using default local address
                  <div className="mb-6 p-4 bg-gray-800 rounded">
                       <button
                            onClick={getTestEth}
@@ -1729,7 +1736,7 @@ function App() {
             ) : (
                 <div className="text-center p-8 bg-gray-800 rounded shadow-lg">
                     <p className="text-lg">Please connect your MetaMask wallet to use the DApp.</p>
-                     {!contractAddress || contractAddress === "0x5FbDB2315678afecb367f032d93F642f64180aa3" ?
+                     {!contractAddress ?
                          <p className="text-yellow-400 mt-4">Note: Contract address is not set. Please deploy the contract and update `contractAddress` in App.jsx.</p>
                         :
                          <p className="text-gray-400 mt-4">Ensure you are connected to the correct network where the contract is deployed (e.g., Localhost/Ganache).</p>
