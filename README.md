@@ -103,7 +103,7 @@
     - 购买: 当用户点击 "Buy Cheapest" 时，前端会从 orderBooks 状态中取出该价格层级的 tokenIds 列表中的第一个 tokenId，然后调用 handleBuyFromOrderBook 函数，该函数会触发 buyListedTicket(tokenId, { value: price }) 交易。
 - **ERC721**: 使用 Ownable (控制公证人权限) 和 ReentrancyGuard (防止重入攻击)。
 ## 项目运行截图
-阶段一：链的部署
+### 阶段一：链的部署
 
 打开Ganache
 
@@ -177,14 +177,14 @@
 
 <img src="./img/04026841-3d85-4fbb-b61b-20e34d9d2ed9.png" alt="alt text" style="width:50%;">
 
-阶段二：公证人创建竞猜
+### 阶段二：公证人创建竞猜
 
 先用公证人连接，连接成功后，看到（Notary）和黄色的 "🔑 Notary Actions" 模块，这证明被识别为公证人。
 
 <img src="./img/188b98c022c77aaaabe3cfdd4a317f3c.png" alt="alt text" style="width:50%;">
 <img src="./img/e7abbe04b5e074a78799c11d45e3457e.png" alt="alt text" style="width:50%;">
 
-1. 创建活动：
+1. **创建活动：**
 在 "➕ Create New Activity" 表单中填写Description，Options（逗号隔开），End Time（不能比当前时间小），Initial Pool (ETH)
 
 <img src="./img/d347a6e4c7d61fffaa941115ce57de25.png" alt="alt text" style="width:50%;">
@@ -198,7 +198,7 @@
 
 <img src="./img/b16573f2333176f62a72dd94014b41e0.png" alt="alt text" style="width:50%;">
 
-1. 玩家 A 购买彩票
+2. **玩家 A 购买彩票**
 切换账户：打开 MetaMask，切换到账户2（玩家A）。
 
 <img src="./img/2b972006-618c-46f8-bd73-69aea435d209.png" alt="alt text" style="width:50%;">
@@ -222,7 +222,7 @@
 
 <img src="./img/1e99a8a10a8ea63662e8ac8f687ce8f5.png" alt="alt text" style="width:50%;">
 
-3. 玩家 A 出售彩票（交易功能）
+3. **玩家 A 出售彩票（交易功能）**
 挂单：
 在 "🏷️ List Ticket for Sale" 表单中填写Token ID to List: 买的彩票 ID，
 Price (ETH):希望的卖出价格。
@@ -249,7 +249,7 @@ MetaMask 会弹出两次交易确认：
 
 <img src="./img/60a993c94fd712b2f0a1ea9a83c8a8dd.png" alt="alt text" style="width:50%;">
 
-4. 玩家 B 购买彩票
+4. **玩家 B 购买彩票**
 切换账户：打开 MetaMask，切换到另一个账户
 购买挂单：
 
@@ -282,7 +282,7 @@ ganache里多出一笔交易
 
 <img src="./img/6158d84567ee11f303f5137d92499d46.png" alt="alt text" style="width:50%;">
 
-5. 公证人结算并领取奖金
+5. **公证人结算并领取奖金**
 打开 MetaMask，切换回账户1（公证人）。
 在 "🏁 Settle Activity" 表单中：
 
