@@ -1126,7 +1126,7 @@ function App() {
     const [listTicketPrice, setListTicketPrice] = useState<string>(''); // ETH
     const [settleActivityId, setSettleActivityId] = useState<string>('');
     const [settleWinningOption, setSettleWinningOption] = useState<string>('');
-
+    const [contractBalance, setContractBalance] = useState<any>(ethers.BigNumber.from(0));
     // --- Effects ---
 
     // Connect Wallet
@@ -1187,13 +1187,13 @@ function App() {
         }
     }, []);
 
-    // ...existing code...
+ // ...existing code...
 const fetchData = useCallback(async () => {
-    if (!contract || !account) return;
+    if (!contract || !account || !provider) return;
     setLoadingMessage('Fetching contract data...');
     setErrorMessage('');
     try {
-        // --- Activities (unchanged) ---
+        // --- Activities ---
         const totalActs = await contract.totalActivities();
         const fetchedActivities: any[] = [];
         const actPromises: Promise<any>[] = [];
@@ -1201,47 +1201,38 @@ const fetchData = useCallback(async () => {
             actPromises.push(contract.getActivity(i));
         }
         const actResults = await Promise.allSettled(actPromises);
-        actResults.forEach((result, index) => {
+        actResults.forEach((result) => {
             if (result.status === 'fulfilled') {
                 const actData = result.value;
-                const optionsArray = Array.isArray(actData.options) ? actData.options : [];
                 fetchedActivities.push({
-                    id: actData.id,
+                    id: actData.id, // BigNumber
                     description: actData.description,
-                    options: optionsArray,
+                    options: Array.isArray(actData.options) ? actData.options : [],
                     endTime: actData.endTime,
-                    totalPool: actData.totalPool,
+                    totalPool: actData.totalPool, // BigNumber
                     notary: actData.notary,
                     settled: actData.settled,
-                    winningOption: actData.settled ? actData.winningOption.toNumber() : null,
+                    winningOption: actData.winningOption, // BigNumber
+                    totalWinningAmount: actData.totalWinningAmount // BigNumber
                 });
-            } else {
-                console.error(`Failed to fetch activity ${index + 1}:`, result.reason);
             }
         });
-        // Sort activities by ID descending (newest first)
         fetchedActivities.sort((a, b) => Number(b.id.toString()) - Number(a.id.toString()));
         setActivities(fetchedActivities);
 
-        // --- Tickets: use totalTickets and getTicketInfo (instead of tokenOfOwnerByIndex / totalSupply) ---
+        // --- Tickets ---
         const totalTickets = await contract.totalTickets();
         const total = totalTickets.toNumber();
-
         const ticketInfoPromises: Promise<any>[] = [];
         for (let id = 1; id <= total; id++) {
-            // fetch ticket info and listing in parallel for each token
             ticketInfoPromises.push(
                 Promise.all([
                     Promise.resolve(id),
-                    contract.getTicketInfo(id).catch((e: any) => { console.error('getTicketInfo error', id, e); return null; }),
-                    contract.getListing(id).catch((e: any) => { /* listing may not exist */ return null; })
-                ]).catch((e: any) => {
-                    console.error(`Failed to fetch token ${id}:`, e);
-                    return null;
-                })
+                    contract.getTicketInfo(id).catch(() => null),
+                    contract.getListing(id).catch(() => null)
+                ]).catch(() => null)
             );
         }
-
         const ticketResults = await Promise.allSettled(ticketInfoPromises);
 
         const myTicketsArr: any[] = [];
@@ -1253,38 +1244,54 @@ const fetchData = useCallback(async () => {
             const [tokenIdRaw, info, listing] = res.value;
             if (!info) continue;
             const tokenId = ethers.BigNumber.from(tokenIdRaw);
+            const activityId = ethers.BigNumber.from(info.activityId);
+            const optionIndex = ethers.BigNumber.from(info.optionIndex);
+            const amount = ethers.BigNumber.from(info.amount);
             const ownerAddr = (info.player || info.owner || '').toLowerCase();
-            // My tickets
-            if (ownerAddr === account.toLowerCase()) {
-                myTicketsArr.push({
-                    tokenId,
-                    activityId: info.activityId,
-                    optionIndex: info.optionIndex,
-                    amount: info.amount,
-                    claimed: info.claimed,
-                    listing: (listing && listing.active) ? { price: listing.price, seller: listing.seller } : null
-                });
+
+            // find activity for payout calculation
+            const activity = fetchedActivities.find(a => a.id.eq(activityId));
+            let potentialPayout = ethers.BigNumber.from(0);
+            if (activity && activity.settled && activity.totalWinningAmount && !activity.totalWinningAmount.isZero()) {
+                // only winners (same option) can claim; calculate proportional share:
+                if (optionIndex.eq(activity.winningOption)) {
+                    potentialPayout = amount.mul(activity.totalPool).div(activity.totalWinningAmount);
+                }
             }
-            // Listed tickets (others)
+
+            const ticketObj = {
+                tokenId,
+                activityId,
+                optionIndex,
+                amount,
+                claimed: info.claimed,
+                listing: (listing && listing.active) ? { price: listing.price, seller: listing.seller } : null,
+                potentialPayout // BigNumber
+            };
+
+            if (ownerAddr === account.toLowerCase()) myTicketsArr.push(ticketObj);
             if (listing && listing.active && listing.seller && listing.seller.toLowerCase() !== account.toLowerCase()) {
-                // fetch ticket info already done above
                 listedTicketsArr.push({
-                    tokenId,
-                    activityId: info.activityId,
-                    optionIndex: info.optionIndex,
-                    amount: info.amount,
+                    ...ticketObj,
                     price: listing.price,
                     seller: listing.seller
                 });
             }
         }
 
-        // Sort tickets descending by tokenId
         myTicketsArr.sort((a, b) => Number(b.tokenId.toString()) - Number(a.tokenId.toString()));
         listedTicketsArr.sort((a, b) => Number(b.tokenId.toString()) - Number(a.tokenId.toString()));
 
         setMyTickets(myTicketsArr);
         setListedTickets(listedTicketsArr);
+
+        // --- Contract balance (for display) ---
+        try {
+            const bal = await provider.getBalance(contractAddress);
+            setContractBalance(bal);
+        } catch (balErr) {
+            console.warn('Failed to read contract balance:', balErr);
+        }
 
         setLoadingMessage('');
     } catch (error: any) {
@@ -1292,7 +1299,8 @@ const fetchData = useCallback(async () => {
         setErrorMessage(`Error fetching data: ${error?.data?.message || error?.message || error}`);
         setLoadingMessage('');
     }
-}, [contract, account]);
+}, [contract, account, provider]);
+// ...existing code...
 
     useEffect(() => {
         if (contractAddress) {
@@ -1628,6 +1636,30 @@ const handleCreateActivity = async (e: React.FormEvent) => {
      };
 
 
+// ...existing code...
+    // Listen to contract events to refresh UI
+    useEffect(() => {
+        if (!contract) return;
+        const onSettled = (activityId: any, winningOption: any) => {
+            console.log('ActivitySettled', activityId.toString(), winningOption.toString());
+            setSuccessMessage(`Activity ${activityId.toString()} settled (winner: ${winningOption.toString()})`);
+            fetchData();
+        };
+        const onWinningsClaimed = (tokenId: any, player: any, amount: any) => {
+            console.log('WinningsClaimed', tokenId.toString(), player, amount.toString());
+            setSuccessMessage(`Winnings claimed for ticket ${tokenId.toString()}`);
+            fetchData();
+        };
+
+        contract.on('ActivitySettled', onSettled);
+        contract.on('WinningsClaimed', onWinningsClaimed);
+
+        return () => {
+            contract.removeListener('ActivitySettled', onSettled);
+            contract.removeListener('WinningsClaimed', onWinningsClaimed);
+        };
+    }, [contract, fetchData]);
+// ...existing code...
     // --- Render ---
 
     return (
@@ -1713,43 +1745,58 @@ const handleCreateActivity = async (e: React.FormEvent) => {
                          <h2 className="text-xl font-semibold text-teal-300 border-b border-gray-700 pb-2">🎟️ My Tickets (NFTs)</h2>
                          <div className="max-h-96 overflow-y-auto space-y-3 pr-2">
                              {myTickets.length > 0 ? myTickets.map(ticket => {
-                                  const activity = activities.find(a => a.id.eq(ticket.activityId));
-                                  const canClaim = activity?.settled && activity.winningOption === ticket.optionIndex && !ticket.claimed;
-                                  const isListed = ticket.listing !== null;
-                                 return (
-                                     <div key={ticket.tokenId.toString()} className={`p-3 rounded text-sm ${isListed ? 'bg-yellow-800 border border-yellow-600' : 'bg-gray-700'}`}>
-                                         <p><strong>Token ID:</strong> {ticket.tokenId.toString()}</p>
-                                         <p><strong>Activity ID:</strong> {ticket.activityId.toString()}</p>
-                                         <p><strong>Option:</strong> {ticket.optionIndex.toString()} ({activity?.options[ticket.optionIndex] || '?'})</p>
-                                         <p><strong>Amount Bet:</strong> {formatEther(ticket.amount)} ETH</p>
-                                         {activity?.settled && (
-                                             <p className={`font-bold ${activity.winningOption === ticket.optionIndex ? 'text-green-400' : 'text-red-400'}`}>
-                                                 {activity.winningOption === ticket.optionIndex ? 'WINNER' : 'Lost'}
-                                                 {ticket.claimed ? ' (Claimed)' : ''}
-                                             </p>
-                                         )}
-                                          {isListed && (
-                                              <div className="mt-2 pt-2 border-t border-yellow-700">
-                                                  <p className="text-yellow-300 font-semibold">Listed for: {formatEther(ticket.listing.price)} ETH</p>
-                                                  <button
-                                                      onClick={() => handleCancelListing(ticket.tokenId)}
-                                                      className="mt-1 text-xs bg-red-600 hover:bg-red-700 text-white py-1 px-2 rounded"
-                                                  >
-                                                      Cancel Listing
-                                                  </button>
-                                              </div>
-                                          )}
-                                         {canClaim && (
-                                             <button
-                                                 onClick={() => handleClaimWinnings(ticket.tokenId)}
-                                                 className="mt-2 bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-3 rounded text-sm"
-                                             >
-                                                 Claim Winnings
-                                             </button>
-                                         )}
-                                     </div>
-                                 );
-                             }) : <p>You don't own any tickets.</p>}
+    const activity = activities.find(a => a.id.eq(ticket.activityId));
+    // 使用 BigNumber.eq 或字符串比较来判断是否为中奖选项
+    const winningOptionMatches = !!activity && activity.winningOption != null
+        ? (ethers.BigNumber.isBigNumber(activity.winningOption)
+            ? activity.winningOption.eq(ticket.optionIndex)
+            : String(activity.winningOption) === String(ticket.optionIndex))
+        : false;
+
+    const canClaim = activity?.settled && winningOptionMatches && !ticket.claimed;
+    const isListed = ticket.listing !== null;
+    return (
+        <div key={ticket.tokenId.toString()} className={`p-3 rounded text-sm ${isListed ? 'bg-yellow-800 border border-yellow-600' : 'bg-gray-700'}`}>
+            <p><strong>Token ID:</strong> {ticket.tokenId.toString()}</p>
+            <p><strong>Activity ID:</strong> {ticket.activityId.toString()}</p>
+            <p><strong>Option:</strong> {ticket.optionIndex.toString()} ({activity?.options[ticket.optionIndex] || '?'})</p>
+            <p><strong>Amount Bet:</strong> {formatEther(ticket.amount)} ETH</p>
+
+            {activity?.settled && (
+                <p className={`font-bold ${winningOptionMatches ? 'text-green-400' : 'text-red-400'}`}>
+                    {winningOptionMatches ? 'WINNER' : 'Lost'}
+                    {ticket.claimed ? ' (Claimed)' : ''}
+                </p>
+            )}
+
+            {/* 显示可提取金额（如果已计算） */}
+            {ticket.potentialPayout && !ticket.potentialPayout.isZero() && (
+                <p className="text-sm text-teal-200">Potential payout: {formatEther(ticket.potentialPayout)} ETH</p>
+            )}
+
+            {isListed && (
+                <div className="mt-2 pt-2 border-t border-yellow-700">
+                    <p className="text-yellow-300 font-semibold">Listed for: {formatEther(ticket.listing.price)} ETH</p>
+                    <button
+                        onClick={() => handleCancelListing(ticket.tokenId)}
+                        className="mt-1 text-xs bg-red-600 hover:bg-red-700 text-white py-1 px-2 rounded"
+                    >
+                        Cancel Listing
+                    </button>
+                </div>
+            )}
+
+            {canClaim && (
+                <button
+                    onClick={() => handleClaimWinnings(ticket.tokenId)}
+                    className="mt-2 bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-3 rounded text-sm"
+                >
+                    Claim Winnings
+                </button>
+            )}
+        </div>
+    );
+}) : <p>You don't own any tickets.</p>}
                          </div>
 
                          <h3 className="text-lg font-semibold text-teal-300 pt-4 border-t border-gray-700">🏷️ List Ticket for Sale</h3>
