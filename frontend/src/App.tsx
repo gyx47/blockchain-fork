@@ -1147,7 +1147,23 @@ function App() {
                 await web3Provider.send("eth_requestAccounts", []);
                 const web3Signer = web3Provider.getSigner();
                 const userAccount = await web3Signer.getAddress();
-                const easyBetContract = new ethers.Contract(contractAddress, contractABI, web3Signer);
+                        // DEBUG: 检查网络 & 合约代码
+        const network = await web3Provider.getNetwork();
+        console.log('Connected network:', network);
+
+        // 将 provider 暴露到 window 以便在控制台调试：在控制台运行 window.__appProvider.getCode(contractAddress)
+        (window as any).__appProvider = web3Provider;
+
+        const code = await web3Provider.getCode(contractAddress);
+        console.log('Contract code at address:', contractAddress, code);
+        if (!code || code === '0x') {
+            setErrorMessage(`No contract found at ${contractAddress} on network ${network.name || network.chainId}. Please switch MetaMask to the correct network or update contractAddress.`);
+            setLoadingMessage('');
+            return;
+        }
+
+        const easyBetContract = new ethers.Contract(contractAddress, contractABI, web3Signer);
+
 
                 setProvider(web3Provider);
                 setSigner(web3Signer);
@@ -1171,132 +1187,112 @@ function App() {
         }
     }, []);
 
-    // Fetch Contract Data
-    const fetchData = useCallback(async () => {
-        if (!contract || !account) return;
-        setLoadingMessage('Fetching contract data...');
-        setErrorMessage('');
-        try {
-            // Fetch Activities
-            const totalActs = await contract.totalActivities();
-            const fetchedActivities: any[] = [];
-            const actPromises: Promise<any>[] = [];
-            for (let i = 1; i <= totalActs.toNumber(); i++) {
-                actPromises.push(contract.getActivity(i));
-            }
-            const results = await Promise.allSettled(actPromises);
-            results.forEach((result, index) => {
-                 if (result.status === 'fulfilled') {
-                    const actData = result.value;
-                     // Ensure options array is correctly formatted (it might be nested)
-                     const optionsArray = Array.isArray(actData.options) ? actData.options : [];
-                     fetchedActivities.push({
-                         id: actData.id,
-                         description: actData.description,
-                         options: optionsArray,
-                         endTime: actData.endTime,
-                         totalPool: actData.totalPool,
-                         notary: actData.notary,
-                         settled: actData.settled,
-                         winningOption: actData.settled ? actData.winningOption.toNumber() : null,
-                     });
-                 } else {
-                     console.error(`Failed to fetch activity ${index + 1}:`, result.reason);
-                 }
-            });
-            // Sort activities by ID descending (newest first)
-             fetchedActivities.sort((a, b) => b.id.sub(a.id));
-             setActivities(fetchedActivities);
-
-
-            // Fetch My Tickets (NFTs)
-            const balance = await contract.balanceOf(account);
-            // const fetchedMyTickets: any[] = []; // Not used
-            const ticketPromises: Promise<any>[] = [];
-             // const listedMarketTickets: any[] = []; // Not used
-
-            for (let i = 0; i < balance.toNumber(); i++) {
-                ticketPromises.push(
-                    contract.tokenOfOwnerByIndex(account, i)
-                    .then((tokenId: any) => Promise.all([
-                        Promise.resolve(tokenId),
-                        contract.getTicketInfo(tokenId),
-                        contract.getListing(tokenId) // Fetch listing info too
-                    ]))
-                    .then(([tokenId, info, listing]: [any, any, any]) => ({
-                        tokenId: tokenId,
-                        activityId: info.activityId,
-                        optionIndex: info.optionIndex,
-                        amount: info.amount,
-                        claimed: info.claimed,
-                        listing: listing.active ? { price: listing.price, seller: listing.seller } : null
-                    }))
-                    .catch((err: any) => {
-                        console.error(`Failed to fetch info for ticket index ${i}:`, err);
-                        return null; // Handle potential errors for individual tokens
-                    })
-                );
-            }
-
-             // Fetch All Listed Tickets (simplified - iterates through all minted tokens)
-             // In production, use events or a dedicated mapping/array for listed tokens
-             const totalSupply = await contract.totalSupply();
-             const listingPromises: Promise<any>[] = [];
-             for (let i = 1; i <= totalSupply.toNumber(); i++) {
-                 listingPromises.push(
-                     contract.getListing(i)
-                         .then((listing: any) => {
-                             if (listing.active && listing.seller.toLowerCase() !== account.toLowerCase()) {
-                                 // Fetch additional info only if listed and not owned by current user
-                                return contract.getTicketInfo(i).then((info: any) => ({
-                                     tokenId: ethers.BigNumber.from(i),
-                                     activityId: info.activityId,
-                                     optionIndex: info.optionIndex,
-                                     amount: info.amount,
-                                     price: listing.price,
-                                     seller: listing.seller
-                                 })).catch((err: any) => {
-                                      console.error(`Failed to fetch ticket info for listed token ${i}:`, err);
-                                      return null;
-                                 });
-                             }
-                             return null;
-                         })
-                         .catch((err: any) => {
-                              console.error(`Failed to fetch listing for token ${i}:`, err);
-                              return null; // Handle potential errors for individual listings
-                         })
-                 );
-             }
-
-
-             const [myTicketResults, listedTicketResults] = await Promise.all([
-                 Promise.allSettled(ticketPromises),
-                 Promise.allSettled(listingPromises)
-             ]);
-
-             const validMyTickets = myTicketResults
-                 .filter(result => result.status === 'fulfilled' && result.value)
-                 .map((result: any) => result.value)
-                 .sort((a, b) => b.tokenId.sub(a.tokenId)); // Sort by tokenId descending
-
-             const validListedTickets = listedTicketResults
-                 .filter(result => result.status === 'fulfilled' && result.value)
-                 .map((result: any) => result.value)
-                 .sort((a, b) => b.tokenId.sub(a.tokenId)); // Sort by tokenId descending
-
-             setMyTickets(validMyTickets);
-             setListedTickets(validListedTickets);
-
-
-            setLoadingMessage('');
-        } catch (error: any) {
-            console.error("Error fetching data:", error);
-            setErrorMessage(`Error fetching data: ${error?.data?.message || error?.message || error}`);
-            setLoadingMessage('');
+    // ...existing code...
+const fetchData = useCallback(async () => {
+    if (!contract || !account) return;
+    setLoadingMessage('Fetching contract data...');
+    setErrorMessage('');
+    try {
+        // --- Activities (unchanged) ---
+        const totalActs = await contract.totalActivities();
+        const fetchedActivities: any[] = [];
+        const actPromises: Promise<any>[] = [];
+        for (let i = 1; i <= totalActs.toNumber(); i++) {
+            actPromises.push(contract.getActivity(i));
         }
-    }, [contract, account]);
+        const actResults = await Promise.allSettled(actPromises);
+        actResults.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                const actData = result.value;
+                const optionsArray = Array.isArray(actData.options) ? actData.options : [];
+                fetchedActivities.push({
+                    id: actData.id,
+                    description: actData.description,
+                    options: optionsArray,
+                    endTime: actData.endTime,
+                    totalPool: actData.totalPool,
+                    notary: actData.notary,
+                    settled: actData.settled,
+                    winningOption: actData.settled ? actData.winningOption.toNumber() : null,
+                });
+            } else {
+                console.error(`Failed to fetch activity ${index + 1}:`, result.reason);
+            }
+        });
+        // Sort activities by ID descending (newest first)
+        fetchedActivities.sort((a, b) => Number(b.id.toString()) - Number(a.id.toString()));
+        setActivities(fetchedActivities);
 
+        // --- Tickets: use totalTickets and getTicketInfo (instead of tokenOfOwnerByIndex / totalSupply) ---
+        const totalTickets = await contract.totalTickets();
+        const total = totalTickets.toNumber();
+
+        const ticketInfoPromises: Promise<any>[] = [];
+        for (let id = 1; id <= total; id++) {
+            // fetch ticket info and listing in parallel for each token
+            ticketInfoPromises.push(
+                Promise.all([
+                    Promise.resolve(id),
+                    contract.getTicketInfo(id).catch((e: any) => { console.error('getTicketInfo error', id, e); return null; }),
+                    contract.getListing(id).catch((e: any) => { /* listing may not exist */ return null; })
+                ]).catch((e: any) => {
+                    console.error(`Failed to fetch token ${id}:`, e);
+                    return null;
+                })
+            );
+        }
+
+        const ticketResults = await Promise.allSettled(ticketInfoPromises);
+
+        const myTicketsArr: any[] = [];
+        const listedTicketsArr: any[] = [];
+
+        for (let i = 0; i < ticketResults.length; i++) {
+            const res = ticketResults[i];
+            if (res.status !== 'fulfilled' || !res.value) continue;
+            const [tokenIdRaw, info, listing] = res.value;
+            if (!info) continue;
+            const tokenId = ethers.BigNumber.from(tokenIdRaw);
+            const ownerAddr = (info.player || info.owner || '').toLowerCase();
+            // My tickets
+            if (ownerAddr === account.toLowerCase()) {
+                myTicketsArr.push({
+                    tokenId,
+                    activityId: info.activityId,
+                    optionIndex: info.optionIndex,
+                    amount: info.amount,
+                    claimed: info.claimed,
+                    listing: (listing && listing.active) ? { price: listing.price, seller: listing.seller } : null
+                });
+            }
+            // Listed tickets (others)
+            if (listing && listing.active && listing.seller && listing.seller.toLowerCase() !== account.toLowerCase()) {
+                // fetch ticket info already done above
+                listedTicketsArr.push({
+                    tokenId,
+                    activityId: info.activityId,
+                    optionIndex: info.optionIndex,
+                    amount: info.amount,
+                    price: listing.price,
+                    seller: listing.seller
+                });
+            }
+        }
+
+        // Sort tickets descending by tokenId
+        myTicketsArr.sort((a, b) => Number(b.tokenId.toString()) - Number(a.tokenId.toString()));
+        listedTicketsArr.sort((a, b) => Number(b.tokenId.toString()) - Number(a.tokenId.toString()));
+
+        setMyTickets(myTicketsArr);
+        setListedTickets(listedTicketsArr);
+
+        setLoadingMessage('');
+    } catch (error: any) {
+        console.error("Error fetching data:", error);
+        setErrorMessage(`Error fetching data: ${error?.data?.message || error?.message || error}`);
+        setLoadingMessage('');
+    }
+}, [contract, account]);
 
     useEffect(() => {
         if (contractAddress) {
