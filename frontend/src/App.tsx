@@ -1360,36 +1360,125 @@ const fetchData = useCallback(async () => {
         }
     };
 
-    const handleCreateActivity = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!contract || !isNotary) return;
+    // ...existing code...
+const handleCreateActivity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contract || !isNotary || !provider || !signer || !account) return;
+    try {
+        const optionsArray = newActivityOptions.split(',').map(opt => opt.trim()).filter(opt => opt);
+        if (optionsArray.length < 2) {
+            setErrorMessage("Please provide at least two comma-separated options.");
+            return;
+        }
+        const endTimeDate = new Date(newActivityEndTime);
+        if (isNaN(endTimeDate.getTime())) {
+            setErrorMessage("Invalid end date/time format.");
+            return;
+        }
+        const endTimeTimestamp = Math.floor(endTimeDate.getTime() / 1000);
+        const poolAmount = parseEther(newActivityPool || '0');
+
+        // Quick client-side checks
+        const chainBlock = await provider.getBlock('latest');
+        if (endTimeTimestamp <= chainBlock.timestamp) {
+            setErrorMessage("End time must be in the future (greater than current block timestamp).");
+            return;
+        }
+        // If contract requires non-zero pool, enforce here (optional)
+        // if (poolAmount.isZero()) { setErrorMessage("Initial pool must be greater than 0."); return; }
+
+        // Build txn object for simulation
+        const txData = contract.interface.encodeFunctionData("createActivity", [newActivityDesc, optionsArray, endTimeTimestamp]);
+        const callTx = {
+            to: contractAddress,
+            from: account,
+            data: txData,
+            value: poolAmount.toHexString()
+        };
+
+        // Helper to decode revert reason (supports Error(string))
+        const decodeRevertReason = (data: string) => {
+            try {
+                if (!data || data === '0x') return null;
+                // standard Error(string) selector 0x08c379a0
+                if (data.startsWith('0x08c379a0')) {
+                    const reasonHex = '0x' + data.slice(10);
+                    const reason = ethers.utils.defaultAbiCoder.decode(['string'], reasonHex)[0];
+                    return reason;
+                }
+                // fallback: try utf8 decode
+                try {
+                    return ethers.utils.toUtf8String('0x' + data.replace(/^0x/, '').slice(8)); // best-effort
+                } catch (e) {
+                    return `Reverted with data: ${data}`;
+                }
+            } catch (e) {
+                return `Failed to decode revert data: ${String(e)}`;
+            }
+        };
+
+        // 1) Simulate via provider.call to surface revert data (avoid MetaMask generic -32603)
         try {
-            const optionsArray = newActivityOptions.split(',').map(opt => opt.trim()).filter(opt => opt);
-            if (optionsArray.length < 2) {
-                setErrorMessage("Please provide at least two comma-separated options.");
+            await provider.call(callTx); // If this throws, capture below
+        } catch (simErr: any) {
+            console.error("provider.call simulation error:", simErr);
+            // Attempt to extract hex revert data from different shapes
+            const hex =
+                simErr?.error?.data ||
+                simErr?.data ||
+                (simErr?.body && (() => { try { return JSON.parse(simErr.body).error?.data } catch { return null } })()) ||
+                simErr?.error?.originalError?.data ||
+                null;
+            const reason = decodeRevertReason(typeof hex === 'string' ? hex : (simErr?.error?.message || simErr?.message || String(simErr)));
+            setErrorMessage(`Simulation failed: ${reason || 'reverted (no reason returned)'} (check node logs)`);
+            return;
+        }
+
+        // 2) Estimate gas
+        let gasEstimate;
+        try {
+            gasEstimate = await contract.estimateGas.createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount });
+        } catch (gasErr: any) {
+            console.error("Gas estimate failed:", gasErr);
+            // try to extract reason similarly
+            const hex = gasErr?.error?.data || gasErr?.data || null;
+            const reason = decodeRevertReason(hex);
+            setErrorMessage(`Estimate gas failed: ${reason || gasErr?.message || String(gasErr)}`);
+            return;
+        }
+
+        // 3) Balance check (value + gas)
+        try {
+            const bal = await provider.getBalance(account);
+            const gasPrice = await provider.getGasPrice();
+            const gasCost = gasEstimate.mul(gasPrice);
+            if (bal.lt(poolAmount.add(gasCost))) {
+                setErrorMessage("Insufficient balance to cover pool amount + estimated gas. Fund the account and retry.");
                 return;
             }
-            const endTimeDate = new Date(newActivityEndTime);
-            if (isNaN(endTimeDate.getTime())) {
-                 setErrorMessage("Invalid end date/time format.");
-                 return;
-            }
-            const endTimeTimestamp = Math.floor(endTimeDate.getTime() / 1000);
-            const poolAmount = parseEther(newActivityPool || '0');
-
-            await handleTx(
-                contract.createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount }),
-                'Activity created successfully!'
-            );
-            // Clear form
-            setNewActivityDesc('');
-            setNewActivityOptions('');
-            setNewActivityEndTime('');
-            setNewActivityPool('');
-        } catch (error) {
-            // Error handled by handleTx
+        } catch (balErr) {
+            console.warn("Balance/gasPrice check failed:", balErr);
         }
-    };
+
+        // 4) Send tx via signer with gas buffer
+        const gasLimit = gasEstimate.mul(120).div(100); // +20%
+        await handleTx(
+            contract.connect(signer).createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount, gasLimit }),
+            'Activity created successfully!'
+        );
+
+        // Clear form
+        setNewActivityDesc('');
+        setNewActivityOptions('');
+        setNewActivityEndTime('');
+        setNewActivityPool('');
+    } catch (error: any) {
+        console.error("Create activity error (unexpected):", error);
+        const msg = error?.message ?? String(error);
+        setErrorMessage(`Failed to create activity: ${msg}`);
+    }
+};
+// ...existing code...
 
     const handleBuyTicket = async (e: React.FormEvent) => {
         e.preventDefault();
