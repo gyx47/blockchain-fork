@@ -1110,9 +1110,11 @@ function App() {
     const [activities, setActivities] = useState<any[]>([]);
     const [myTickets, setMyTickets] = useState<any[]>([]);
     const [listedTickets, setListedTickets] = useState<any[]>([]);
+    const [orderBooks, setOrderBooks] = useState<any[]>([]); // <-- 新增：聚合后的订单簿
     const [loadingMessage, setLoadingMessage] = useState<string>('');
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [successMessage, setSuccessMessage] = useState<string>('');
+    const [contractBalance, setContractBalance] = useState<any>(ethers.BigNumber.from(0));
 
     // --- Form States ---
     const [newActivityDesc, setNewActivityDesc] = useState<string>('');
@@ -1126,7 +1128,7 @@ function App() {
     const [listTicketPrice, setListTicketPrice] = useState<string>(''); // ETH
     const [settleActivityId, setSettleActivityId] = useState<string>('');
     const [settleWinningOption, setSettleWinningOption] = useState<string>('');
-    const [contractBalance, setContractBalance] = useState<any>(ethers.BigNumber.from(0));
+    
     // --- Effects ---
 
     // Connect Wallet
@@ -1187,12 +1189,12 @@ function App() {
         }
     }, []);
 
- // ...existing code...
-const fetchData = useCallback(async () => {
-    if (!contract || !account || !provider) return;
-    setLoadingMessage('Fetching contract data...');
-    setErrorMessage('');
-    try {
+    // Fetch Data from Contract
+    const fetchData = useCallback(async () => {
+        if (!contract || !account || !provider) return;
+        setLoadingMessage('Fetching contract data...');
+        setErrorMessage('');
+        try {
         // --- Activities ---
         const totalActs = await contract.totalActivities();
         const fetchedActivities: any[] = [];
@@ -1300,8 +1302,8 @@ const fetchData = useCallback(async () => {
         setLoadingMessage('');
     }
 }, [contract, account, provider]);
-// ...existing code...
 
+    // 自动连接钱包（如果地址已设置）
     useEffect(() => {
         if (contractAddress) {
              connectWallet(); // Attempt to connect automatically if address is set
@@ -1333,6 +1335,65 @@ const fetchData = useCallback(async () => {
         fetchData();
     }, [fetchData]); // Refetch when contract or account changes
 
+
+    // 将 listedTickets 聚合为 orderBooks（按 activity -> option -> price levels）
+    useEffect(() => {
+        if (!listedTickets || listedTickets.length === 0) {
+            setOrderBooks([]);
+            return;
+        }
+        const grouped: any = {}; // key = `${activityId}-${optionIndex}`
+        listedTickets.forEach((lt: any) => {
+            try {
+                const activityId = lt.activityId.toString();
+                const optionIndex = typeof lt.optionIndex === 'number' ? lt.optionIndex : (lt.optionIndex.toNumber ? lt.optionIndex.toNumber() : parseInt(String(lt.optionIndex)));
+                const key = `${activityId}-${optionIndex}`;
+                const priceKey = lt.price.toString();
+
+                if (!grouped[key]) {
+                    const activity = activities.find(a => String(a.id) === String(activityId));
+                    grouped[key] = {
+                        activityId,
+                        description: activity ? activity.description : '',
+                        optionIndex,
+                        optionText: activity && Array.isArray(activity.options) ? (activity.options[optionIndex] || '?') : '?',
+                        sellLevels: {}
+                    };
+                }
+
+                if (!grouped[key].sellLevels[priceKey]) {
+                    grouped[key].sellLevels[priceKey] = {
+                        price: lt.price,
+                        tokenIds: [],
+                        totalAmountBet: ethers.BigNumber.from(0),
+                        sampleSeller: lt.seller // keep one seller to display
+                    };
+                }
+
+                grouped[key].sellLevels[priceKey].tokenIds.push(lt.tokenId);
+                grouped[key].sellLevels[priceKey].totalAmountBet = grouped[key].sellLevels[priceKey].totalAmountBet.add(lt.amountBet || ethers.BigNumber.from(0));
+            } catch (e) {
+                console.warn('OrderBook grouping error:', e, lt);
+            }
+        });
+
+        const books = Object.values(grouped).map((g: any) => {
+            const levels = Object.values(g.sellLevels)
+                .map((l: any) => ({ price: l.price, tokenIds: l.tokenIds, totalAmountBet: l.totalAmountBet, sampleSeller: l.sampleSeller }))
+                .sort((a: any, b: any) => {
+                    try { return a.price.sub(b.price).toNumber(); } catch { return 0; }
+                });
+            return {
+                activityId: g.activityId,
+                description: g.description,
+                optionIndex: g.optionIndex,
+                optionText: g.optionText,
+                sellOrders: levels
+            };
+        });
+
+        setOrderBooks(books);
+    }, [listedTickets, activities]);
 
     // --- Transaction Handlers ---
 
@@ -1368,125 +1429,123 @@ const fetchData = useCallback(async () => {
         }
     };
 
-    // ...existing code...
-const handleCreateActivity = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!contract || !isNotary || !provider || !signer || !account) return;
-    try {
-        const optionsArray = newActivityOptions.split(',').map(opt => opt.trim()).filter(opt => opt);
-        if (optionsArray.length < 2) {
-            setErrorMessage("Please provide at least two comma-separated options.");
-            return;
-        }
-        const endTimeDate = new Date(newActivityEndTime);
-        if (isNaN(endTimeDate.getTime())) {
-            setErrorMessage("Invalid end date/time format.");
-            return;
-        }
-        const endTimeTimestamp = Math.floor(endTimeDate.getTime() / 1000);
-        const poolAmount = parseEther(newActivityPool || '0');
-
-        // Quick client-side checks
-        const chainBlock = await provider.getBlock('latest');
-        if (endTimeTimestamp <= chainBlock.timestamp) {
-            setErrorMessage("End time must be in the future (greater than current block timestamp).");
-            return;
-        }
-        // If contract requires non-zero pool, enforce here (optional)
-        // if (poolAmount.isZero()) { setErrorMessage("Initial pool must be greater than 0."); return; }
-
-        // Build txn object for simulation
-        const txData = contract.interface.encodeFunctionData("createActivity", [newActivityDesc, optionsArray, endTimeTimestamp]);
-        const callTx = {
-            to: contractAddress,
-            from: account,
-            data: txData,
-            value: poolAmount.toHexString()
-        };
-
-        // Helper to decode revert reason (supports Error(string))
-        const decodeRevertReason = (data: string) => {
-            try {
-                if (!data || data === '0x') return null;
-                // standard Error(string) selector 0x08c379a0
-                if (data.startsWith('0x08c379a0')) {
-                    const reasonHex = '0x' + data.slice(10);
-                    const reason = ethers.utils.defaultAbiCoder.decode(['string'], reasonHex)[0];
-                    return reason;
-                }
-                // fallback: try utf8 decode
-                try {
-                    return ethers.utils.toUtf8String('0x' + data.replace(/^0x/, '').slice(8)); // best-effort
-                } catch (e) {
-                    return `Reverted with data: ${data}`;
-                }
-            } catch (e) {
-                return `Failed to decode revert data: ${String(e)}`;
-            }
-        };
-
-        // 1) Simulate via provider.call to surface revert data (avoid MetaMask generic -32603)
+    const handleCreateActivity = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!contract || !isNotary || !provider || !signer || !account) return;
         try {
-            await provider.call(callTx); // If this throws, capture below
-        } catch (simErr: any) {
-            console.error("provider.call simulation error:", simErr);
-            // Attempt to extract hex revert data from different shapes
-            const hex =
-                simErr?.error?.data ||
-                simErr?.data ||
-                (simErr?.body && (() => { try { return JSON.parse(simErr.body).error?.data } catch { return null } })()) ||
-                simErr?.error?.originalError?.data ||
-                null;
-            const reason = decodeRevertReason(typeof hex === 'string' ? hex : (simErr?.error?.message || simErr?.message || String(simErr)));
-            setErrorMessage(`Simulation failed: ${reason || 'reverted (no reason returned)'} (check node logs)`);
-            return;
-        }
-
-        // 2) Estimate gas
-        let gasEstimate;
-        try {
-            gasEstimate = await contract.estimateGas.createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount });
-        } catch (gasErr: any) {
-            console.error("Gas estimate failed:", gasErr);
-            // try to extract reason similarly
-            const hex = gasErr?.error?.data || gasErr?.data || null;
-            const reason = decodeRevertReason(hex);
-            setErrorMessage(`Estimate gas failed: ${reason || gasErr?.message || String(gasErr)}`);
-            return;
-        }
-
-        // 3) Balance check (value + gas)
-        try {
-            const bal = await provider.getBalance(account);
-            const gasPrice = await provider.getGasPrice();
-            const gasCost = gasEstimate.mul(gasPrice);
-            if (bal.lt(poolAmount.add(gasCost))) {
-                setErrorMessage("Insufficient balance to cover pool amount + estimated gas. Fund the account and retry.");
+            const optionsArray = newActivityOptions.split(',').map(opt => opt.trim()).filter(opt => opt);
+            if (optionsArray.length < 2) {
+                setErrorMessage("Please provide at least two comma-separated options.");
                 return;
             }
-        } catch (balErr) {
-            console.warn("Balance/gasPrice check failed:", balErr);
+            const endTimeDate = new Date(newActivityEndTime);
+            if (isNaN(endTimeDate.getTime())) {
+                setErrorMessage("Invalid end date/time format.");
+                return;
+            }
+            const endTimeTimestamp = Math.floor(endTimeDate.getTime() / 1000);
+            const poolAmount = parseEther(newActivityPool || '0');
+
+            // Quick client-side checks
+            const chainBlock = await provider.getBlock('latest');
+            if (endTimeTimestamp <= chainBlock.timestamp) {
+                setErrorMessage("End time must be in the future (greater than current block timestamp).");
+                return;
+            }
+            // If contract requires non-zero pool, enforce here (optional)
+            // if (poolAmount.isZero()) { setErrorMessage("Initial pool must be greater than 0."); return; }
+
+            // Build txn object for simulation
+            const txData = contract.interface.encodeFunctionData("createActivity", [newActivityDesc, optionsArray, endTimeTimestamp]);
+            const callTx = {
+                to: contractAddress,
+                from: account,
+                data: txData,
+                value: poolAmount.toHexString()
+            };
+
+            // Helper to decode revert reason (supports Error(string))
+            const decodeRevertReason = (data: string) => {
+                try {
+                    if (!data || data === '0x') return null;
+                    // standard Error(string) selector 0x08c379a0
+                    if (data.startsWith('0x08c379a0')) {
+                        const reasonHex = '0x' + data.slice(10);
+                        const reason = ethers.utils.defaultAbiCoder.decode(['string'], reasonHex)[0];
+                        return reason;
+                    }
+                    // fallback: try utf8 decode
+                    try {
+                        return ethers.utils.toUtf8String('0x' + data.replace(/^0x/, '').slice(8)); // best-effort
+                    } catch (e) {
+                        return `Reverted with data: ${data}`;
+                    }
+                } catch (e) {
+                    return `Failed to decode revert data: ${String(e)}`;
+                }
+            };
+
+            // 1) Simulate via provider.call to surface revert data (avoid MetaMask generic -32603)
+            try {
+                await provider.call(callTx); // If this throws, capture below
+            } catch (simErr: any) {
+                console.error("provider.call simulation error:", simErr);
+                // Attempt to extract hex revert data from different shapes
+                const hex =
+                    simErr?.error?.data ||
+                    simErr?.data ||
+                    (simErr?.body && (() => { try { return JSON.parse(simErr.body).error?.data } catch { return null } })()) ||
+                    simErr?.error?.originalError?.data ||
+                    null;
+                const reason = decodeRevertReason(typeof hex === 'string' ? hex : (simErr?.error?.message || simErr?.message || String(simErr)));
+                setErrorMessage(`Simulation failed: ${reason || 'reverted (no reason returned)'} (check node logs)`);
+                return;
+            }
+
+            // 2) Estimate gas
+            let gasEstimate;
+            try {
+                gasEstimate = await contract.estimateGas.createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount });
+            } catch (gasErr: any) {
+                console.error("Gas estimate failed:", gasErr);
+                // try to extract reason similarly
+                const hex = gasErr?.error?.data || gasErr?.data || null;
+                const reason = decodeRevertReason(hex);
+                setErrorMessage(`Estimate gas failed: ${reason || gasErr?.message || String(gasErr)}`);
+                return;
+            }
+
+            // 3) Balance check (value + gas)
+            try {
+                const bal = await provider.getBalance(account);
+                const gasPrice = await provider.getGasPrice();
+                const gasCost = gasEstimate.mul(gasPrice);
+                if (bal.lt(poolAmount.add(gasCost))) {
+                    setErrorMessage("Insufficient balance to cover pool amount + estimated gas. Fund the account and retry.");
+                    return;
+                }
+            } catch (balErr) {
+                console.warn("Balance/gasPrice check failed:", balErr);
+            }
+
+            // 4) Send tx via signer with gas buffer
+            const gasLimit = gasEstimate.mul(120).div(100); // +20%
+            await handleTx(
+                contract.connect(signer).createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount, gasLimit }),
+                'Activity created successfully!'
+            );
+
+            // Clear form
+            setNewActivityDesc('');
+            setNewActivityOptions('');
+            setNewActivityEndTime('');
+            setNewActivityPool('');
+        } catch (error: any) {
+            console.error("Create activity error (unexpected):", error);
+            const msg = error?.message ?? String(error);
+            setErrorMessage(`Failed to create activity: ${msg}`);
         }
-
-        // 4) Send tx via signer with gas buffer
-        const gasLimit = gasEstimate.mul(120).div(100); // +20%
-        await handleTx(
-            contract.connect(signer).createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount, gasLimit }),
-            'Activity created successfully!'
-        );
-
-        // Clear form
-        setNewActivityDesc('');
-        setNewActivityOptions('');
-        setNewActivityEndTime('');
-        setNewActivityPool('');
-    } catch (error: any) {
-        console.error("Create activity error (unexpected):", error);
-        const msg = error?.message ?? String(error);
-        setErrorMessage(`Failed to create activity: ${msg}`);
-    }
-};
-// ...existing code...
+    };
 
     const handleBuyTicket = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1566,12 +1625,26 @@ const handleCreateActivity = async (e: React.FormEvent) => {
 
      const handleBuyListedTicket = async (tokenId: any, price: any) => {
          if (!contract) return;
-         await handleTx(
-             contract.buyListedTicket(tokenId, { value: price }),
-             `Ticket ${tokenId} purchased successfully!`
-         );
-     };
+         try {
+             // Normalize inputs immediately to avoid later closure / reference bugs
+             const tokenIdStr = tokenId && tokenId.toString ? tokenId.toString() : String(tokenId);
+             const priceStr = price && price.toString ? price.toString() : String(price);
+             const tokenIdBN = ethers.BigNumber.from(tokenIdStr);
+             const priceBN = ethers.BigNumber.from(priceStr);
 
+             console.log(`Buying listed token -> tokenId: ${tokenIdBN.toString()}, price: ${priceBN.toString()}`);
+
+             // Use handleTx but ensure we pass a fresh tx Promise
+             await handleTx(
+                 contract.buyListedTicket(tokenIdBN, { value: priceBN }),
+                 `Ticket ${tokenIdBN.toString()} purchased successfully!`
+             );
+         } catch (err: any) {
+             console.error("handleBuyListedTicket error:", err);
+             // Let handleTx set friendly message when possible, otherwise show fallback
+             if (!errorMessage) setErrorMessage(err?.message || String(err));
+         }
+     };
 
     const handleSettleActivity = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -1602,7 +1675,53 @@ const handleCreateActivity = async (e: React.FormEvent) => {
             `Winnings for ticket ${tokenId} claimed!`
         );
     };
+// 新增：从订单簿购买该价位金额最高的一张票（复用已有 handleBuyListedTicket）
+// ...existing code...
+const handleBuyFromOrderBook = async (activityId: string, optionIndex: number, priceLevel: any) => {
+    if (!priceLevel || !priceLevel.tokenIds || priceLevel.tokenIds.length === 0) {
+        setErrorMessage("No tickets available at this price.");
+        return;
+    }
 
+    // Snapshot tokenIds for safety
+    const tokenIds = (priceLevel.tokenIds || []).map((t: any) => (t && t.toString) ? t.toString() : String(t));
+
+    // Find listedTickets entries for these tokenIds and pick the one with MAX amount
+    let chosenTokenIdStr: string | null = null;
+    let maxAmount = ethers.BigNumber.from(0);
+
+    for (const tidStr of tokenIds) {
+        const found = listedTickets.find((lt: any) => {
+            const ltId = (lt.tokenId && lt.tokenId.toString) ? lt.tokenId.toString() : String(lt.tokenId);
+            return ltId === tidStr;
+        });
+        const amt = found ? (found.amount ?? found.amountBet ?? ethers.BigNumber.from(0)) : ethers.BigNumber.from(0);
+        const amtBN = ethers.BigNumber.isBigNumber(amt) ? amt : ethers.BigNumber.from(amt);
+        if (amtBN.gt(maxAmount)) {
+            maxAmount = amtBN;
+            chosenTokenIdStr = tidStr;
+        }
+    }
+
+    // Fallback to first token if none matched
+    if (!chosenTokenIdStr) {
+        chosenTokenIdStr = tokenIds[0];
+    }
+
+    const priceStr = priceLevel.price && priceLevel.price.toString ? priceLevel.price.toString() : String(priceLevel.price);
+
+    console.log(`handleBuyFromOrderBook -> activity:${activityId} option:${optionIndex} chosenToken:${chosenTokenIdStr} price:${priceStr} (maxAmount=${maxAmount.toString()})`);
+
+    try {
+        const tokenIdBN = ethers.BigNumber.from(chosenTokenIdStr);
+        const priceBN = ethers.BigNumber.from(priceStr);
+        await handleBuyListedTicket(tokenIdBN, priceBN);
+    } catch (e: any) {
+        console.error("handleBuyFromOrderBook buy error:", e);
+        if (!errorMessage) setErrorMessage(e?.message || String(e));
+    }
+};
+// ...existing code...
      // Simple faucet for local testing (adjust amount and recipient as needed)
      const getTestEth = async () => {
          if (!provider || !account) return;
@@ -1636,7 +1755,6 @@ const handleCreateActivity = async (e: React.FormEvent) => {
      };
 
 
-// ...existing code...
     // Listen to contract events to refresh UI
     useEffect(() => {
         if (!contract) return;
@@ -1659,7 +1777,7 @@ const handleCreateActivity = async (e: React.FormEvent) => {
             contract.removeListener('WinningsClaimed', onWinningsClaimed);
         };
     }, [contract, fetchData]);
-// ...existing code...
+
     // --- Render ---
 
     return (
@@ -1811,30 +1929,121 @@ const handleCreateActivity = async (e: React.FormEvent) => {
 
                      {/* Column 3: Marketplace & Notary Actions */}
                      <div className="bg-gray-800 p-4 rounded shadow-lg space-y-4">
-                          <h2 className="text-xl font-semibold text-teal-300 border-b border-gray-700 pb-2">🛒 Marketplace (Listed Tickets)</h2>
-                         <div className="max-h-96 overflow-y-auto space-y-3 pr-2">
-                              {listedTickets.length > 0 ? listedTickets.map(ticket => {
-                                   const activity = activities.find(a => a.id.eq(ticket.activityId));
-                                   return (
-                                       <div key={ticket.tokenId.toString()} className="p-3 bg-gray-700 rounded text-sm flex justify-between items-center">
-                                            <div>
-                                                 <p><strong>Token ID:</strong> {ticket.tokenId.toString()}</p>
-                                                 <p><strong>Activity ID:</strong> {ticket.activityId.toString()} ({activity?.description.substring(0, 20) || '?'}...)</p>
-                                                 <p><strong>Option:</strong> {ticket.optionIndex.toString()} ({activity?.options[ticket.optionIndex] || '?'})</p>
-                                                 <p><strong>Bet Amount:</strong> {formatEther(ticket.amount)} ETH</p>
-                                                 <p><strong>Price:</strong> {formatEther(ticket.price)} ETH</p>
-                                                 <p className="text-xs text-gray-400">Seller: {ticket.seller.substring(0, 6)}...</p>
-                                            </div>
-                                            <button
-                                                 onClick={() => handleBuyListedTicket(ticket.tokenId, ticket.price)}
-                                                 className="bg-purple-500 hover:bg-purple-600 text-white font-bold py-1 px-3 rounded text-sm ml-2"
-                                            >
-                                                 Buy
-                                             </button>
-                                       </div>
-                                   );
-                              }) : <p>No tickets currently listed for sale by others.</p>}
-                         </div>
+                        <h2 className="text-xl font-semibold text-teal-300 border-b border-gray-700 pb-2">🛒 Order Books (Sell Orders)</h2>
+<div className="max-h-96 overflow-y-auto space-y-4 pr-2">
+    {orderBooks.length > 0 ? orderBooks.map((book: any) => (
+        <div key={`${book.activityId}-${book.optionIndex}`} className="p-3 bg-gray-700 rounded text-sm">
+            <div className="flex justify-between items-start">
+                <div>
+                    <p className="font-semibold">Activity {book.activityId}: {book.description}</p>
+                    <p className="text-sm text-teal-300">Option {book.optionIndex}: {book.optionText}</p>
+                </div>
+                <div className="text-right text-xs text-gray-400">
+                    <p>{/* total levels */}{book.sellOrders.length} price level(s)</p>
+                    <p className="mt-1">Available: {book.sellOrders.reduce((sum: number, l: any) => sum + l.tokenIds.length, 0)} tickets</p>
+                </div>
+            </div>
+
+            <div className="mt-3">
+                <table className="w-full text-left text-xs table-fixed">
+                    <thead>
+                        <tr className="border-b border-gray-600">
+                            <th className="w-1/3 py-1">Price (ETH)</th>
+                            <th className="w-1/3 py-1">Count</th>
+                            <th className="w-1/4 py-1">Amount Bet (ETH)</th>
+                            <th className="w-1/3 py-1">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+{book.sellOrders.map((level: any, idx: number) => {
+    // build token detail list by matching listedTickets (safe string compare)
+    const tokenDetails = (level.tokenIds || []).map((tid: any) => {
+        const tidStr = (tid && tid.toString) ? tid.toString() : String(tid);
+        const found = listedTickets.find((lt: any) => {
+            const ltId = (lt.tokenId && lt.tokenId.toString) ? lt.tokenId.toString() : String(lt.tokenId);
+            return ltId === tidStr;
+        });
+        const amount = found ? (found.amount ?? found.amountBet ?? ethers.BigNumber.from(0)) : ethers.BigNumber.from(0);
+        const seller = found ? found.seller : (level.sampleSeller || 'N/A');
+        return { tokenId: tidStr, amount, seller };
+    });
+
+    return (
+        <React.Fragment key={idx}>
+            {/* price level summary row */}
+            <tr className="border-b border-gray-700 hover:bg-gray-600">
+                <td className="py-1 font-mono truncate">{formatEther(level.price)}</td>
+                <td className="py-1 text-center">{(level.tokenIds || []).length}</td>
+                <td className="py-1 text-center">{formatEther(level.totalAmountBet || ethers.BigNumber.from(0))}</td>
+                <td className="py-1">
+                    <div className="flex gap-2">
+                        {/* Optional: keep a level-wide buy (will buy first token in this level) */}
+                        <button
+                            onClick={() => handleBuyFromOrderBook(book.activityId, book.optionIndex, level)}
+                            className="bg-purple-600 hover:bg-purple-700 text-white text-xs py-1 px-2 rounded"
+                            disabled={loadingMessage.startsWith('Processing')}
+                        >
+                            Buy (first)
+                        </button>
+                        <button
+                            onClick={() => {
+                                const details = tokenDetails.map((d: { tokenId: string; amount: any; seller: string }) => `${d.tokenId} (${formatEther(d.amount)} ETH) by ${d.seller}`);
+                                console.log("Tokens at this level:", details);
+                                setSuccessMessage(`Tokens: ${details.join(', ')}`);
+                                setTimeout(()=>setSuccessMessage(''), 4000);
+                            }}
+                            className="bg-gray-600 hover:bg-gray-500 text-white text-xs py-1 px-2 rounded"
+                        >
+                            Show IDs
+                        </button>
+                    </div>
+                </td>
+            </tr>
+
+            {/* expanded per-token rows */}
+            <tr className="bg-gray-800">
+                <td colSpan={4} className="p-2">
+                    <div className="space-y-2">
+                        {tokenDetails.map((t: any) => (
+                            <div key={t.tokenId} className="flex items-center justify-between bg-gray-700 p-2 rounded">
+                                <div className="text-sm">
+                                    <div><strong>Token ID:</strong> {t.tokenId}</div>
+                                    <div className="text-xs text-gray-300">Amount bet: {formatEther(t.amount)} ETH</div>
+                                    <div className="text-xs text-gray-400">Seller: {t.seller}</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                const tokenIdBN = ethers.BigNumber.from(t.tokenId);
+                                                const priceBN = level.price;
+                                                console.log(`Buying token ${t.tokenId} for price ${priceBN.toString()}`);
+                                                await handleBuyListedTicket(tokenIdBN, priceBN);
+                                            } catch (e:any) {
+                                                console.error("Buy token error:", e);
+                                                if (!errorMessage) setErrorMessage(e?.message || String(e));
+                                            }
+                                        }}
+                                        className="bg-green-600 hover:bg-green-700 text-white text-sm py-1 px-3 rounded"
+                                        disabled={loadingMessage.startsWith('Processing')}
+                                    >
+                                        Buy (Pay ETH)
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </td>
+            </tr>
+        </React.Fragment>
+    );
+})}
+</tbody>
+                </table>
+            </div>
+        </div>
+    )) : <p className="text-sm text-gray-400">No sell orders found.</p>}
+</div>
 
                          {/* Notary Section */}
                          {isNotary && (

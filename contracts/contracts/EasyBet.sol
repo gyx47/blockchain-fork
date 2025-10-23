@@ -86,8 +86,6 @@ contract EasyBet is ERC721, Ownable, ReentrancyGuard {
     error NotListed();
     error NotApproved();
 
-    // ...
-    // TODO add any logic if you want
     function createActivity(
         string memory _description,
         string[] memory _options,
