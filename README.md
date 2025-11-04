@@ -1,30 +1,360 @@
-# 浙大彩票
+# EasyBet：一个基于区块链分叉的竞猜 DApp
+课程: 区块链与数字货币
+姓名: 葛芸曦
+学号: 3230104150
+日期: 2025年11月4日
+# 项目介绍
+本项目是一个名为 “EasyBet” 的去中心化应用（dApp）。它构建在以太坊区块链（或兼容的 EVM 链）上，旨在模拟一个简单的竞猜游戏（例如，抛硬币猜正反面）。
 
-> 第二次作业要求（以下内容提交时可以删除）：
-> 
-> 进阶的去中心化彩票系统，参与方包括：竞猜玩家、公证人
->
-> **背景**：传统的体育彩票系统（例如我国的体育彩票）一般没有彩票交易功能：例如，对于“NBA本赛季MVP为某球员/F1的赛季总冠军为某车队”这类持续时间长的事件的下注一般在赛季开始前就会买定离手，这使得一旦出现突发或不确定事件（如球员A赛季报销/球队B买入强力球星/C车队车手受伤等），很多玩家的选择便会立即失去意义，导致彩票游戏的可玩性下降。因此，一个有趣的探索方向是让彩票系统拥有合规、方便的交易功能。
->
-> 建立一个进阶的去中心化彩票系统（可以是体育彩票，或其它任何比赛节目的竞猜，例如《中国好声音》《我是歌手》年度总冠军等，可以参考 [Polymarket](./img/https://polymarket.com/) ），在网站中：
-> - 公证人（你自己）可以创立许多竞猜项目：例如某场比赛的输赢、年度总冠军的得主等，每个项目应当有2个或多个可能的选项，一定的彩票总金额（由公证人提供），以及规定好的结果公布时间。
-> - 玩家首先领取到测试所需以太币。在网站中，对于一个竞猜项目和多个可能的选项：
->   1. 每个竞彩玩家都可以选择其中的某个选项并购买一定金额（自己定义）的彩票，购买后该玩家会获得一张对应的彩票凭证（一个 ERC721 合约中的 Token）
->   2. 在竞彩结果公布之前，任何玩家之间可以买卖他们的彩票，以应对项目进行期间的任何突发状况。具体的买卖机制如下：一个玩家可以以指定的金额挂单出售（ERC721 Delegate）自己的彩票，其它玩家如果觉得该彩票有利可图就可以买入他的彩票。双方完成一次 ERC721 Token 交易。
->   3. 公证人可以在时间截止时（简单起见，你可以随时终止项目）输入竞猜的结果并进行结算。所有胜利的玩家可以平分奖池中的金额。
-> - Bonus（最多5分，若想要完成，可以直接将功能整合进上述要求中）：
->   1. （2分）发行一个 ERC20 合约，允许用户领取 ERC20 积分，并使用ERC20积分完成上述流程。
->   2. （3分）对交易彩票的过程实现一个简单的链上订单簿：卖方用户可以以不同价格出售一种彩票，网页上显示当前订单簿的信息（多少价格有多少该彩票正在出售）。其他用户可以根据最优价格购买彩票。
-> - 可以对上述需求进行合理更改和说明。请大家专注于功能实现，网站UI美观程度不纳入评分标准，能让用户能够舒适操作即可。
+项目后端是一个用 Solidity 编写的智能合约 (EasyBet.sol)，它负责处理竞猜逻辑、接收下注和分发奖励。前端是一个使用 React 和 TypeScript 构建的网页应用，用户可以通过它与智能合约进行交互。
 
-## 如何运行
+本项目利用 Hardhat 作为开发环境，在本地分叉（fork）的网络上进行合约的部署和测试，这使得开发和调试过程更加高效。用户可以通过连接他们的加密钱包（如 MetaMask）来下注，并查看竞猜结果。
+# 功能介绍
+## 公证人 (Owner):
+
+创立竞猜项目（设置主题，选项，初始池子金额，结束时间），结束竞猜项目（设置答案，结算金额），查看竞猜项目及其状态
+## 玩家(User):
+连接 MetaMask 钱包。
+领取测试以太币。
+查看当前的竞猜项目及其状态。
+输入金额并选择选项进行下注。
+出售彩票。查看订单簿按彩票种类和价格二次分类的详细信息，在订单簿购买彩票（单买彩票，直接买最高性价比的彩票）。
+领取奖金（不是平分的，是按照购入权重比例分的）。
+
+
+# 功能实现分析(含订单簿 Bonus +3)
+### 智能合约
+- **核心合约（EasyBet.sol）**
+EasyBet.sol继承了 OpenZeppelin 的标准合约，以确保安全性、可管理性和代币标准化：
+
+ERC721("EasyBet Ticket", "EBT"): 这使得合约本身就是一个 NFT 合约。每个用户下的赌注都会被铸造（Mint）成一个唯一的 NFT（我们称之为“彩票”），使其具有所有权和可交易性。
+
+Ownable: 引入了合约所有者（Owner）的概念，即部署合约的“公证人”（Notary）。createActivity 和 settleActivity 这两个关键函数被 onlyOwner 修饰符保护，确保只有管理员才能创建和结算竞猜活动。
+
+ReentrancyGuard: 所有涉及资金转移（ETH）的函数（如 buyTicket, listTicket, buyListedTicket, claimWinnings）都被 nonReentrant 修饰符保护，防止在资金转移过程中发生“重入攻击”。
+```solidity
+contract EasyBet is ERC721, Ownable, ReentrancyGuard {
+}
+```
+### 重要数据结构
+- struct Activity: 存储一个竞猜活动的所有信息，包括描述、选项 (string[] options)、结束时间、总奖池 (totalPool)、是否已结算 (settled) 以及获胜选项 (winningOption)。
+
+- struct BetInfo: 存储一个特定赌注（“门票”）的信息，包括它属于哪个活动 (activityId)、玩家地址、下注时选择的选项 (optionIndex)、下注金额 (amount) 以及是否已领取奖金 (claimed)。
+
+- struct Listing: 存储 NFT 门票在二级市场上的挂单信息，包括卖家、价格和是否激活。
+```solidity
+    struct Activity {
+        uint256 id;                 
+        string description;        
+        string[] options;           
+        uint256 endTime;            
+        uint256 totalPool;         
+        address payable notary;     
+        bool settled;               
+        uint256 winningOption;      
+        uint256 totalWinningAmount; 
+    }
+    struct BetInfo {
+        uint256 activityId;         
+        address player;             
+        uint256 optionIndex;        
+        uint256 amount;             
+        bool claimed;              
+    }
+    struct Listing {
+        address seller;             
+        uint256 price;             
+        bool active;                /
+    }
+```
+### 重要函数
+- **项目创建 (createActivity)**: 管理员调用 createActivity()，传入描述、选项数组和结束时间。管理员需要支付一笔初始资金（msg.value）作为活动的启动奖池。
+```solidity
+function createActivity(
+        string memory _description,
+        string[] memory _options,
+        uint256 _endTime
+    ) external payable onlyOwner {
+        require(_options.length >= 2, "Must have at least two options");
+        require(_endTime > block.timestamp, "End time must be in the future");
+        require(msg.value > 0, "Initial pool must be greater than zero");//错误检查
+
+        _activityIds.increment();
+        uint256 newActivityId = _activityIds.current();
+
+        activities[newActivityId] = Activity({
+            id: newActivityId,
+            description: _description,
+            options: _options,
+            endTime: _endTime,
+            totalPool: msg.value, 
+            notary: payable(owner()),
+            settled: false,
+            winningOption: 0, 
+            totalWinningAmount: 0
+        });
+//创建活动
+        emit ActivityCreated(newActivityId, _description, _options, _endTime);//发布活动
+    }
+  ```
+- **彩票购买 (buyTicket)**: 用户调用 buyTicket()，传入 activityId 和 _optionIndex。
+  - 合约检查活动是否存在、是否已结算、是否已过截止时间。
+  - 用户的 msg.value (下注金额) 被添加到 activity.totalPool。
+  - 核心: 合约调用 _safeMint(msg.sender, newTokenId)，为用户铸造一个代表此赌注的 NFT。
+  - 合约在 ticketInfo 中记录这个新 tokenId 对应的赌注详情。
+```solidity
+ function buyTicket(uint256 _activityId, uint256 _optionIndex) external payable nonReentrant {
+        Activity storage activity = activities[_activityId];
+
+        if (activity.id == 0) revert ActivityNotFound(); // 检查活动是否存在、是否已结算、是否已过截止时间。
+        if (activity.settled) revert ActivityAlreadySettled();
+        if (block.timestamp >= activity.endTime) revert BettingClosed();
+        if (_optionIndex >= activity.options.length) revert InvalidOption();
+        if (msg.value == 0) revert InvalidAmount();
+
+        // Increment pool
+        activity.totalPool += msg.value;
+
+        //铸造一个代表此赌注的 NFT
+        _tokenIds.increment();
+        uint256 newTokenId = _tokenIds.current();
+        _safeMint(msg.sender, newTokenId);
+
+        // 在 ticketInfo 中记录这个新 tokenId 对应的赌注详情
+        ticketInfo[newTokenId] = BetInfo({
+            activityId: _activityId,
+            player: msg.sender,
+            optionIndex: _optionIndex,
+            amount: msg.value,
+            claimed: false
+        });
+//发布
+        emit TicketPurchased(newTokenId, _activityId, msg.sender, _optionIndex, msg.value);
+    }
+```
+- **项目结算 (settleActivity)**: 竞猜结束后，管理员调用 settleActivity()，传入 activityId 和 _winningOptionIndex，合约将活动标记为 settled 并记录获胜选项。
+```solidity
+   function settleActivity(uint256 _activityId, uint256 _winningOptionIndex) external onlyOwner {
+        Activity storage activity = activities[_activityId];
+      //此处省略错误检查
+      //标记为 settled 并记录获胜选项
+        activity.settled = true;
+        activity.winningOption = _winningOptionIndex;
+        emit ActivitySettled(_activityId, _winningOptionIndex);
+    }
+```
+- **奖金领取 (claimWinnings)**: 获胜的用户（即持有 optionIndex 与 winningOption 相匹配的 NFT 门票的玩家）调用 claimWinnings()。
+  - 合约检查用户是否是 NFT 持有者、活动是否结算、门票是否中奖、是否已领奖。
+  - 奖金计算: 奖金是按比例分配的。计算公式为 (bet.amount * activity.totalPool) / totalWinningAmount。
+  - 合约将计算出的 winnings（ETH）发送给用户。
+```solidity
+function claimWinnings(uint256 _tokenId) external nonReentrant {
+        BetInfo storage bet = ticketInfo[_tokenId];
+        Activity storage activity = activities[bet.activityId];
+      //此处省略错误检查
+        uint256 totalWinningAmount = activity.totalWinningAmount;
+        if (totalWinningAmount == 0) {
+           totalWinningAmount = _calculateTotalWinningAmount(bet.activityId);
+              activity.totalWinningAmount = totalWinningAmount;
+        }
+        if (totalWinningAmount == 0) {
+             bet.claimed = true; 
+             emit WinningsClaimed(_tokenId, msg.sender, 0);
+             return;
+        }}
+
+```
+- **彩票交易**:
+  这是项目的一个高级bonus+3功能。如果一个用户在活动结算前，认为自己持有的彩票会输，或者想提前锁定利润，他可以将其以任意价格卖掉
+  - **挂单 (listTicket)**: 持有者（ownerOf(_tokenId)）首先需要调用 approve(address(this), _tokenId)（前端 App.tsx 中已处理），授权合约可以转移这个 NFT。然后调用 listTicket() 设置价格。
+```solidity
+function listTicket(uint256 _tokenId, uint256 _price) external nonReentrant {
+      //此处省略错误检查
+        BetInfo storage bet = ticketInfo[_tokenId];
+        Activity storage activity = activities[bet.activityId];
+        if (activity.settled) revert ActivityAlreadySettled();
+        listings[_tokenId] = Listing({
+            seller: msg.sender,
+            price: _price,
+            active: true
+        });
+
+        emit TicketListed(_tokenId, msg.sender, _price);
+    }
+```
+  - **取消挂单 (cancelListing)**: 卖家调用此函数取消挂单。
+```solidity
+function cancelListing(uint256 _tokenId) external nonReentrant {
+        Listing storage listing = listings[_tokenId];
+        //此处省略错误检查
+        listing.active = false;
+        emit ListingCancelled(_tokenId);
+    }
+```
+  - **购买 (buyListedTicket)**: 任何其他用户都可以调用此函数，支付挂单者（listing.seller）设定的价格（msg.value == listing.price）。
+  - 合约调用 _transfer(seller, msg.sender, _tokenId) 将 NFT 转移给新买家。
+  - 合约将 msg.value（即售价）发送给原卖家。
+  - ticketInfo[tokenId].player 被更新为新买家地址，这意味着新买家继承了这张门票领取奖金的权利。
+```solidity
+function buyListedTicket(uint256 _tokenId) external payable nonReentrant {
+        Listing storage listing = listings[_tokenId];
+        address seller = listing.seller; 
+        //此处省略错误检查
+        listing.active = false;
+        _transfer(seller, msg.sender, _tokenId);
+        (bool success, ) = seller.call{value: msg.value}("");
+        if (!success) revert TransferFailed();
+        ticketInfo[_tokenId].player = msg.sender;
+        emit TicketSold(_tokenId, seller, msg.sender, msg.value);
+    }
+```
+- **订单簿实现:**
+- 链上: 合约保持简单，只存储单个 tokenId 的挂单信息 (listings mapping)，包含卖家地址和 ETH 价格。
+- 链下 (前端 App.tsx):
+
+    - fetchData 函数会调用 contract.totalSupply() 获取总票数。
+    然后它会循环（从 i = 0 到 totalSupply - 1），对每个索引调用contract.tokenByIndex(i) 来获取 tokenId。对每个 tokenId，它会并行获取 ownerOf, getListing, 和 getTicketInfo。
+    - 前端过滤出所有活跃的、非当前用户拥有的挂单，并将它们收集到一个临时数组 allListings 中。接着，代码处理 allListings 数组：按 activityId 和 optionIndex 分组。在每个选项组内，按 price (ETH 价格) 再次分组。统计每个价格层级有多少个 tokenId 可供购买。最终构建出一个嵌套的 orderBooks 状态变量，并渲染到 "Order Books" 栏中。
+    - 购买: 当用户点击 "Buy Cheapest" 时，前端会从 orderBooks 状态中取出该价格层级的 tokenIds 列表中的第一个 tokenId，然后调用 handleBuyFromOrderBook 函数，该函数会触发 buyListedTicket(tokenId, { value: price }) 交易。
+
+### 前端重要函数
+- 钱包连接: connectWallet 函数通过 window.ethereum (MetaMask 注入的对象) 创建 Ethers.js 的 Web3Provider 和 Signer，并获取用户账户。
+```solidity
+// 钱包连接
+const web3Provider = new ethers.providers.Web3Provider((window as any).ethereum);
+await web3Provider.send("eth_requestAccounts", []);
+const web3Signer = web3Provider.getSigner();
+const userAccount = await web3Signer.getAddress();
+const network = await web3Provider.getNetwork();
+console.log('Connected network:', network);
+// 将 provider 暴露到 window 以便在控制台调试
+(window as any).__appProvider = web3Provider;
+const code = await web3Provider.getCode(contractAddress);
+console.log('Contract code at address:', contractAddress, code);
+if (!code || code === '0x') {
+    setErrorMessage(`No contract found at ${contractAddress} on network ${network.name || network.chainId}. Please switch MetaMask to the correct network or update contractAddress.`);
+    setLoadingMessage('');
+     return;
+}
+//合约连接
+const easyBetContract = new ethers.Contract(contractAddress, contractABI, web3Signer);
+```
+- 数据获取 (fetchData): 这是前端的“同步”功能。它会在应用加载和交易成功后被调用。它通过合约的 view 函数（如 totalActivities, getActivity, getTicketInfo）读取所有活动和门票数据，并将其处理后存入 React state，触发界面刷新。
+```solidity
+const fetchData = useCallback(async () => {
+        if (!contract || !account || !provider) return;
+        setLoadingMessage('Fetching contract data...');
+        setErrorMessage('');
+        try {
+        // --- Activities ---
+        const totalActs = await contract.totalActivities();
+        //省略变量初始化
+        for (let i = 1; i <= totalActs.toNumber(); i++) {
+            actPromises.push(contract.getActivity(i));
+        }
+        const actResults = await Promise.allSettled(actPromises);
+        actResults.forEach((result) => {
+            if (result.status === 'fulfilled') {
+                const actData = result.value;
+                fetchedActivities.push({
+              //省略创建活动列表
+                });
+            }
+        });
+
+        // --- Tickets ---
+        const totalTickets = await contract.totalTickets();
+        //省略变量初始化
+        for (let id = 1; id <= total; id++) {
+            ticketInfoPromises.push(
+                Promise.all([
+                    Promise.resolve(id),
+                    contract.getTicketInfo(id).catch(() => null),
+                    contract.getListing(id).catch(() => null)
+                ]).catch(() => null)
+            );
+        }
+        const ticketResults = await Promise.allSettled(ticketInfoPromises);
+        
+      //省略创建票列表
+      //和活动关联，设置winner和loser的权限
+      //省略更新票列表
+        }}
+        // --- Contract balance ---
+        try {
+            const bal = await provider.getBalance(contractAddress);
+            setContractBalance(bal);
+        } catch (balErr) {
+        //省略错误处理
+}, [contract, account, provider]);
+```
+- 交易处理 (handleTx): 这是一个封装了合约写入操作的辅助函数。
+1. 显示 "Processing transaction..." 加载提示。
+2. 等待交易被矿工打包（await tx.wait()）。
+3. 在成功后调用 fetchData() 来刷新界面，确保用户能立即看到变更。
+```solidity
+const handleTx = async (txPromise: Promise<any>, successMsg: string) => {
+//省略初始化
+        try {
+            const tx = await txPromise;
+            setLoadingMessage('Waiting for confirmation...');
+            await tx.wait();
+            setSuccessMessage(successMsg);
+            fetchData(); // Refresh data after successful transaction
+        } catch (error: any) {
+        //省略错误处理
+        }
+    };
+```
+
+调用示例
+
+```solidity
+await handleTx(
+                contract.connect(signer).createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount, gasLimit }),
+                'Activity created successfully!'
+            );
+```
+
+- 还有类似createActivity的前端功能函数，基本实现都是直接调用合约ABI接口进行活动，按照需求可能有模拟预估，余额检查，和发送交易
+```solidity
+//省略验证和解码
+//模拟和预估：构建一个“交易草案”，问区块链节点能否成功
+  const txData = contract.interface.encodeFunctionData("createActivity", [newActivityDesc, optionsArray, endTimeTimestamp]);
+            const callTx = {
+                to: contractAddress,
+                from: account,
+                data: txData,
+                value: poolAmount.toHexString()
+            };
+
+//余额检查
+            let gasEstimate;
+            try {
+                gasEstimate = await contract.estimateGas.createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount });
+            } catch (gasErr: any) {
+                console.error("Gas estimate failed:", gasErr);
+                // try to extract reason similarly
+                const hex = gasErr?.error?.data || gasErr?.data || null;
+                const reason = decodeRevertReason(hex);
+                setErrorMessage(`Estimate gas failed: ${reason || gasErr?.message || String(gasErr)}`);
+                return;
+            }
+//真正发送交易
+await handleTx(
+                contract.connect(signer).createActivity(newActivityDesc, optionsArray, endTimeTimestamp, { value: poolAmount, gasLimit }),
+                'Activity created successfully!'
+            );
+//省略清理和错误处理
+```
+# 如何运行
 
 **步骤**:
 
 1. **启动本地区块链**:
   
   - 打开 Ganache 应用， Quickstart。
-  - 把RPC Server 地址 改成 http://127.0.0.1:8545。复制地址和其中一个账户的 Private Key（用于部署合约和作为公证人）。
+  - 把RPC Server 地址 改成 http://127.0.0.1:8545  。复制地址和其中一个账户的 Private Key（用于部署合约和作为公证人）。
 2. **配置 Hardhat**:
   - 修改 hardhat.config.ts 文件：
     - 把networks.ganache.url 复制为Ganache RPC Server 地址。
@@ -59,7 +389,7 @@
 8. **启动前端应用**:
   - 在 ./frontend 目录下运行:  
     npm start  
-  - 应用将在浏览器中打开 ( http://localhost:3000)。
+  - 应用将在浏览器中打开 ( http://localhost:3000  )。
     
 9. **配置 MetaMask**:
   
@@ -74,35 +404,9 @@
   - 切换到另一个导入的 Ganache 账户（玩家），你可以购买彩票、挂单、购买他人挂单的彩票以及领取奖金。
 
 
-11. 具体的使用流程请看项目运行截图部分
+11. 具体的使用流程请看功能项目运行及功能测试部分
 
-
-## 功能实现分析(含订单簿 Bonus +3)
-
-- **项目创建 (createActivity)**: 公证人调用此函数，传入描述、选项数组、结束时间戳，并发送 ETH 作为初始奖池。合约记录项目信息。
-  
-- **彩票购买 (buyTicket)**: 玩家调用此函数，传入项目 ID、选项索引，并发送 ETH 作为购买金额。合约铸造一个 ERC721 Token 给玩家，记录投注信息，并将 ETH 加入奖池。
-  
-- **彩票交易**:
-  
-  - **挂单 (listTicket)**: 玩家先调用 ERC721 的 approve (通过前端触发) 授权合约转移 NFT，然后调用 listTicket 设置价格，合约记录挂单信息。
-  - **取消挂单 (cancelListing)**: 卖家调用此函数取消挂单。
-  - **购买 (buyListedTicket)**: 买家调用此函数，发送指定价格的 ETH。合约验证支付金额，调用 ERC721 的 transferFrom 转移 NFT，并将 ETH 转给卖家。
-- **项目结算 (settleActivity)**: 公证人调用此函数，传入项目 ID 和获胜选项索引。合约标记项目已结束并记录结果。
-  
-- **奖金领取 (claimWinnings)**: 获胜玩家调用此函数，传入其持有的获胜彩票 Token ID。合约验证条件，计算奖金（基于投注额比例），并将 ETH 转给玩家。奖金计算目前在 claimWinnings 中进行（为了简化部署，但效率不高），理想情况下应在结算时一次性计算或在购买时累积记录获胜投注总额。
-
-- **订单簿实现 (Bonus 2):**
-- 链上: 合约保持简单，只存储单个 tokenId 的挂单信息 (listings mapping)，包含卖家地址和 ETH 价格。
-
-- 链下 (前端 App.tsx):
-
-    - fetchData 函数会调用 contract.totalSupply() 获取总票数。
-    然后它会循环（从 i = 0 到 totalSupply - 1），对每个索引调用contract.tokenByIndex(i) 来获取 tokenId。对每个 tokenId，它会并行获取 ownerOf, getListing, 和 getTicketInfo。
-    - 前端过滤出所有活跃的、非当前用户拥有的挂单，并将它们收集到一个临时数组 allListings 中。接着，代码处理 allListings 数组：按 activityId 和 optionIndex 分组。在每个选项组内，按 price (ETH 价格) 再次分组。统计每个价格层级有多少个 tokenId 可供购买。最终构建出一个嵌套的 orderBooks 状态变量，并渲染到 "Order Books" 栏中。
-    - 购买: 当用户点击 "Buy Cheapest" 时，前端会从 orderBooks 状态中取出该价格层级的 tokenIds 列表中的第一个 tokenId，然后调用 handleBuyFromOrderBook 函数，该函数会触发 buyListedTicket(tokenId, { value: price }) 交易。
-- **ERC721**: 使用 Ownable (控制公证人权限) 和 ReentrancyGuard (防止重入攻击)。
-## 项目运行截图
+# 项目运行以及功能测试截图
 ### 阶段一：链的部署
 
 打开Ganache
@@ -154,7 +458,7 @@
     <img src="./img/2a73a068-d80a-49d9-8014-4176a49ea0f0.png" alt="alt text" style="width:50%;">
     <img src="./img/b1841d68-dc7d-45ce-9f8d-272b69cc4e68.png" alt="alt text" style="width:50%;">
 
-  - 应用将在浏览器中打开 ( http://localhost:3000)。
+  - 应用将在浏览器中打开 ( http://localhost:3000  )。
     
 **配置 MetaMask**:
 浏览器打开后MetaMask会自动弹出。首先要登录。
@@ -314,7 +618,7 @@ ganache里多出一笔交易
 
 
 
-## 参考内容
+# 参考内容
 
 - 课程的参考Demo：[DEMOs](./img/https://github.com/LBruyne/blockchain-course-demos)。
 
