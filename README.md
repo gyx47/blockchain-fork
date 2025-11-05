@@ -29,7 +29,7 @@ EasyBet.sol继承了 OpenZeppelin 的标准合约，以确保安全性、可管�
 
 ERC721("EasyBet Ticket", "EBT"): 这使得合约本身就是一个 NFT 合约。每个用户下的赌注都会被铸造（Mint）成一个唯一的 NFT（我们称之为“彩票”），使其具有所有权和可交易性。
 
-Ownable: 引入了合约所有者（Owner）的概念，即部署合约的“公证人”（Notary）。createActivity 和 settleActivity 这两个关键函数被 onlyOwner 修饰符保护，确保只有管理员才能创建和结算竞猜活动。
+Ownable: 引入了合约所有者（Owner）的概念，即部署合约的“公证人”（Notary）。createActivity 和 settleActivity 这两个关键函数被 onlyOwner 修饰符保护，确保只有公证人才能创建和结算竞猜活动。
 
 ReentrancyGuard: 所有涉及资金转移（ETH）的函数（如 buyTicket, listTicket, buyListedTicket, claimWinnings）都被 nonReentrant 修饰符保护，防止在资金转移过程中发生“重入攻击”。
 ```solidity
@@ -68,7 +68,7 @@ contract EasyBet is ERC721, Ownable, ReentrancyGuard {
     }
 ```
 ### 重要函数
-- **项目创建 (createActivity)**: 管理员调用 createActivity()，传入描述、选项数组和结束时间。管理员需要支付一笔初始资金（msg.value）作为活动的启动奖池。
+- **项目创建 (createActivity)**: 公证人调用 createActivity()，传入描述、选项数组和结束时间。公证人需要支付一笔初始资金（msg.value）作为活动的启动奖池。
 ```solidity
 function createActivity(
         string memory _description,
@@ -132,7 +132,7 @@ function createActivity(
         emit TicketPurchased(newTokenId, _activityId, msg.sender, _optionIndex, msg.value);
     }
 ```
-- **项目结算 (settleActivity)**: 竞猜结束后，管理员调用 settleActivity()，传入 activityId 和 _winningOptionIndex，合约将活动标记为 settled 并记录获胜选项。
+- **项目结算 (settleActivity)**: 竞猜结束后，公证人调用 settleActivity()，传入 activityId 和 _winningOptionIndex，合约将活动标记为 settled 并记录获胜选项。
 ```solidity
    function settleActivity(uint256 _activityId, uint256 _winningOptionIndex) external onlyOwner {
         Activity storage activity = activities[_activityId];
