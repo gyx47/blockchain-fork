@@ -452,7 +452,8 @@ await handleTx(
   - 将 "(现在是我的合约地址)" 替换为你上一步复制的合约地址。
   - **(重要)** 找到 const contractABI = [...]。将 ./contracts/artifacts/contracts/EasyBet.sol/EasyBet.json 文件中的 abi 数组内容复制并替换掉 App.jsx 中的 [...] 部分。
 <img src="./img/aa41bbfd-13d4-4fb4-9f5a-6f1bb6b2d7af.png" alt="alt text" style="width:50%;">
-2. **启动前端应用**:
+2. **启动前端应用** :
+    
   - 在 ./frontend 目录下运行:  
     npm start  
     <img src="./img/2a73a068-d80a-49d9-8014-4176a49ea0f0.png" alt="alt text" style="width:50%;">
